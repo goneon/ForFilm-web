@@ -1630,6 +1630,25 @@ details.mc-config textarea {
     cursor: pointer;
 }
 
+.info-preview-controls .file-upload-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px dashed #27ae60;
+    background: rgba(39, 174, 96, 0.05);
+    color: #27ae60;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.info-preview-controls .file-upload-btn:hover {
+    background: rgba(39, 174, 96, 0.1);
+    border-color: #219a52;
+}
+
 .info-config-panel {
     max-width: 600px;
     margin: 0 auto;

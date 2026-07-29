@@ -197,46 +197,26 @@
                         </div>
                     </div>
 
-                    <!-- 信息墙设置模块 -->
+                    <!-- 信息墙设置模块 (设备直连) -->
                     <div class="settings-section" id="info-settings-section" style="display:none;">
                         <div class="section-header">
                             <i class="material-icons">info</i>
-                            <span>信息墙设置</span>
+                            <span>信息墙设置 (设备直连)</span>
                         </div>
                         <div class="section-content">
                             <div class="setting-item switch-item">
                                 <div class="setting-info">
                                     <span class="setting-label">信息墙开关</span>
+                                    <span class="setting-desc">设备直接请求 API, 无需云函数</span>
                                 </div>
                                 <label class="switch">
                                     <input type="checkbox" id="info-enable-switch" onchange="toggleInfoSwitch()">
                                     <span class="slider-toggle"></span>
                                 </label>
                             </div>
-                            <div class="network-input-group">
-                                <label class="network-label">云函数 URL</label>
-                                <input type="text" id="info-api-url-input" placeholder="云函数 HTTP 触发器地址">
-                            </div>
-                            <div class="network-input-group">
-                                <label class="network-label">Token (esp_token)</label>
-                                <div class="api-url-row">
-                                    <input type="text" id="info-token-input" placeholder="esp_token">
-                                    <button class="secondary-button" onclick="applyInfoToken()" style="width:auto;padding:8px 14px;">
-                                        <i class="material-icons">check</i> 设置
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="network-btn-row">
-                                <button class="secondary-button" onclick="applyInfoApiUrl()">
-                                    <i class="material-icons">check</i> 设置 URL
-                                </button>
-                                <button class="secondary-button" onclick="onInfoRefresh()">
-                                    <i class="material-icons">refresh</i> 立即刷新
-                                </button>
-                            </div>
                             <div class="setting-item">
                                 <div class="setting-info">
-                                    <span class="setting-label">MC 刷新间隔</span>
+                                    <span class="setting-label">刷新间隔</span>
                                     <span id="mc-refresh-value" class="setting-value">10分钟</span>
                                 </div>
                                 <div class="wake-slider-wrapper">
@@ -247,40 +227,9 @@
                                     <span class="wake-max">120分钟</span>
                                 </div>
                             </div>
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <span class="setting-label">AI 刷新间隔</span>
-                                    <span id="ai-refresh-value" class="setting-value">30分钟</span>
-                                </div>
-                                <div class="wake-slider-wrapper">
-                                    <span class="wake-min">1分钟</span>
-                                    <div class="slider-container">
-                                        <input type="range" id="ai-refresh-min" min="1" max="120" step="1" value="30" oninput="updateAiRefreshSlider()" onchange="applyAiRefreshMin()">
-                                    </div>
-                                    <span class="wake-max">120分钟</span>
-                                </div>
-                            </div>
-                            <div class="network-input-group">
-                                <label class="network-label">云函数配置 URL (后端)</label>
-                                <div class="api-url-row">
-                                    <input type="text" id="cloud-function-url-input" placeholder="云函数 HTTP URL (含 https://)">
-                                    <button class="secondary-button" onclick="loadCloudConfig()" style="width:auto;padding:8px 14px;">
-                                        <i class="material-icons">cloud_download</i> 读取
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="network-input-group">
-                                <label class="network-label">esp_token (云端)</label>
-                                <div class="api-url-row">
-                                    <input type="text" id="cloud-esp-token-input" placeholder="esp_token">
-                                    <button class="secondary-button" onclick="rotateCloudToken()" style="width:auto;padding:8px 14px;" title="重置 token">
-                                        <i class="material-icons">autorenew</i>
-                                    </button>
-                                </div>
-                            </div>
                             <div class="network-btn-row">
-                                <button class="secondary-button" onclick="saveCloudConfig()" style="width:100%;">
-                                    <i class="material-icons">save</i> 保存云端配置
+                                <button class="secondary-button" onclick="onInfoRefresh()" style="width:100%;">
+                                    <i class="material-icons">refresh</i> 立即刷新
                                 </button>
                             </div>
                             <div class="wifi-status-row" style="margin-top:8px;">
@@ -588,61 +537,45 @@
                             <canvas id="mc-preview-canvas" width="792" height="528"></canvas>
                         </div>
                         <div class="info-preview-controls">
-                            <select id="mc-preview-style" onchange="mcPreviewRender()">
-                                <option value="elegant">优雅仪表盘</option>
-                                <option value="classic">经典黑白</option>
-                                <option value="gradient">渐变标题栏</option>
-                                <option value="card">卡片式</option>
-                                <option value="pixel">像素风</option>
-                                <option value="dark">深色主题</option>
-                            </select>
-                            <label class="toggle-label"><input type="checkbox" id="mc-show-players" onchange="mcPreviewRender()"><span class="toggle-text">显示玩家头像</span></label>
-                            <button class="secondary-button" onclick="openLayoutEditor('mc')" style="width:auto;padding:6px 14px;font-size:13px;">
-                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">tune</i> 布局调整
+                            <label class="toggle-label"><input type="checkbox" id="mc-show-players" onchange="mcPreviewRender()"><span class="toggle-text">全屏头像模式</span></label>
+                            <label class="file-upload-btn">
+                                <input type="file" id="mc-bg-upload" accept="image/*" style="display:none" onchange="handleBgUpload('mc', this)">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">image</i> 上传背景图
+                            </label>
+                            <button class="secondary-button" id="mc-bg-clear" style="display:none;width:auto;padding:6px 14px;font-size:13px;" onclick="clearBgImage('mc')">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">close</i> 清除背景
                             </button>
                         </div>
                     </div>
-                    <!-- 右侧：配置面板 -->
+                    <!-- 右侧：配置面板 (设备直连) -->
                     <div class="info-config-panel">
                         <div class="settings-section">
                             <div class="section-header">
                                 <i class="material-icons">dns</i>
-                                <span>MC 服务器配置</span>
+                                <span>MC 服务器配置 (设备直连)</span>
                             </div>
                             <div class="section-content">
-                                <div class="network-switch-row">
-                                    <span class="network-label">启用 MC 监控</span>
-                                    <label class="switch">
-                                        <input type="checkbox" id="cloud-mc-enabled" onchange="scheduleCloudSave()">
-                                        <span class="slider-toggle"></span>
-                                    </label>
-                                </div>
                                 <div class="network-input-group">
-                                    <label class="network-label">Ping 方式</label>
-                                    <select id="cloud-mc-method" onchange="scheduleCloudSave(); mcPreviewRender();">
-                                        <option value="slp">SLP 协议</option>
-                                        <option value="http">第三方 HTTP API</option>
-                                    </select>
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">服务器地址</label>
-                                    <input type="text" id="cloud-mc-host" oninput="scheduleCloudSave(); mcPreviewRender();" placeholder="mc.example.com">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">端口</label>
-                                    <input type="number" id="cloud-mc-port" oninput="scheduleCloudSave()" placeholder="25565">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">HTTP URL 模板</label>
-                                    <input type="text" id="cloud-mc-http-url" oninput="scheduleCloudSave()" placeholder="https://mcsrvstat.us/server/{host}:{port}">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">玩家数 JSONPath</label>
-                                    <input type="text" id="cloud-mc-http-json-path" oninput="scheduleCloudSave()" placeholder="$.players.online">
+                                    <label class="network-label">服务器地址 (SLP 直连)</label>
+                                    <div class="api-url-row">
+                                        <input type="text" id="info-mc-host-input" placeholder="mc.example.com" oninput="mcPreviewRender()">
+                                        <input type="number" id="info-mc-port-input" placeholder="25565" style="width:90px;flex:none;" oninput="mcPreviewRender()">
+                                    </div>
+                                    <div class="setting-desc">设备直接 TCP 连接该 IP:端口, 走 Minecraft SLP 协议握手, 无需第三方 API</div>
                                 </div>
                                 <div class="network-btn-row">
-                                    <button class="secondary-button" onclick="cloudMcPing()">
-                                        <i class="material-icons">play_arrow</i> 立即 ping
+                                    <button class="secondary-button" onclick="applyInfoMcHost()" style="width:100%;">
+                                        <i class="material-icons">check</i> 下发 host:port 到设备
+                                    </button>
+                                </div>
+                                <div class="network-input-group">
+                                    <label class="network-label">HTTP API URL (可选兜底)</label>
+                                    <input type="text" id="info-mc-url-input" placeholder="https://api.mcstatus.io/v2/status/java/{host}:{port}">
+                                    <div class="setting-desc">SLP 失败时回退到该 HTTP API, 留空则仅用 SLP 直连</div>
+                                </div>
+                                <div class="network-btn-row">
+                                    <button class="secondary-button" onclick="applyInfoMcUrl()" style="width:100%;">
+                                        <i class="material-icons">check</i> 下发 HTTP URL 到设备
                                     </button>
                                 </div>
                                 <div class="wifi-status-row">
@@ -663,64 +596,43 @@
                             <canvas id="ai-preview-canvas" width="792" height="528"></canvas>
                         </div>
                         <div class="info-preview-controls">
-                            <select id="ai-preview-style" onchange="aiPreviewRender()">
-                                <option value="elegant">优雅仪表盘</option>
-                                <option value="classic">经典黑白</option>
-                                <option value="gradient">渐变标题栏</option>
-                                <option value="card">卡片式</option>
-                                <option value="pixel">像素风</option>
-                                <option value="dark">深色主题</option>
-                            </select>
-                            <button class="secondary-button" onclick="openLayoutEditor('ai')" style="width:auto;padding:6px 14px;font-size:13px;">
-                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">tune</i> 布局调整
+                            <label class="file-upload-btn">
+                                <input type="file" id="ai-bg-upload" accept="image/*" style="display:none" onchange="handleBgUpload('ai', this)">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">image</i> 上传背景图
+                            </label>
+                            <button class="secondary-button" id="ai-bg-clear" style="display:none;width:auto;padding:6px 14px;font-size:13px;" onclick="clearBgImage('ai')">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">close</i> 清除背景
                             </button>
                         </div>
                     </div>
-                    <!-- 右侧：配置面板 -->
+                    <!-- 右侧：配置面板 (设备直连) -->
                     <div class="info-config-panel">
                         <div class="settings-section">
                             <div class="section-header">
                                 <i class="material-icons">smart_toy</i>
-                                <span>AI Token 配置</span>
+                                <span>AI Token 配置 (设备直连)</span>
                             </div>
                             <div class="section-content">
-                                <div class="network-switch-row">
-                                    <span class="network-label">启用 AI 监控</span>
-                                    <label class="switch">
-                                        <input type="checkbox" id="cloud-ai-enabled" onchange="scheduleCloudSave()">
-                                        <span class="slider-toggle"></span>
-                                    </label>
+                                <div class="network-input-group">
+                                    <label class="network-label">显示名称 (仅预览用)</label>
+                                    <input type="text" id="cloud-ai-label" oninput="aiPreviewRender()" placeholder="DeepSeek / 通义千问">
                                 </div>
                                 <div class="network-input-group">
-                                    <label class="network-label">显示名称</label>
-                                    <input type="text" id="cloud-ai-label" oninput="scheduleCloudSave(); aiPreviewRender();" placeholder="DeepSeek / 通义千问">
+                                    <label class="network-label">AI 余额查询 URL</label>
+                                    <input type="text" id="info-ai-url-input" placeholder="https://api.deepseek.com/user/balance">
+                                    <div class="setting-desc">设备直接 GET 该 URL, 解析 is_available.balance / balance 信息</div>
                                 </div>
                                 <div class="network-input-group">
-                                    <label class="network-label">查询 URL</label>
-                                    <input type="text" id="cloud-ai-url" oninput="scheduleCloudSave()" placeholder="https://api.example.com/balance">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">请求方法</label>
-                                    <select id="cloud-ai-method" onchange="scheduleCloudSave()">
-                                        <option value="GET">GET</option>
-                                        <option value="POST">POST</option>
-                                    </select>
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">请求头 (JSON)</label>
-                                    <textarea id="cloud-ai-headers" oninput="scheduleCloudSave()" rows="2" placeholder='{"Authorization": "Bearer xxx"}'></textarea>
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">请求体 (POST)</label>
-                                    <textarea id="cloud-ai-body" oninput="scheduleCloudSave()" rows="2" placeholder='{"key": "value"}'></textarea>
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">余额 JSONPath</label>
-                                    <input type="text" id="cloud-ai-json-path" oninput="scheduleCloudSave()" placeholder="$.data.balance">
+                                    <label class="network-label">AI API Token (Bearer)</label>
+                                    <input type="text" id="info-ai-token-input" placeholder="sk-xxxxxxxxxxxx">
+                                    <div class="setting-desc">设备会以 Authorization: Bearer &lt;token&gt; 请求</div>
                                 </div>
                                 <div class="network-btn-row">
-                                    <button class="secondary-button" onclick="cloudAiQuery()">
-                                        <i class="material-icons">play_arrow</i> 立即查询
+                                    <button class="secondary-button" onclick="applyInfoAiUrl()" style="width:100%;">
+                                        <i class="material-icons">check</i> 下发 URL 到设备
+                                    </button>
+                                    <button class="secondary-button" onclick="applyInfoAiToken()" style="width:100%;">
+                                        <i class="material-icons">check</i> 下发 Token 到设备
                                     </button>
                                 </div>
                                 <div class="wifi-status-row">
@@ -741,66 +653,35 @@
                             <canvas id="srv-preview-canvas" width="792" height="528"></canvas>
                         </div>
                         <div class="info-preview-controls">
-                            <select id="srv-preview-style" onchange="srvPreviewRender()">
-                                <option value="elegant">优雅仪表盘</option>
-                                <option value="classic">经典黑白</option>
-                                <option value="dark">深色主题</option>
-                            </select>
-                            <button class="secondary-button" onclick="openLayoutEditor('srv')" style="width:auto;padding:6px 14px;font-size:13px;">
-                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">tune</i> 布局调整
+                            <label class="file-upload-btn">
+                                <input type="file" id="srv-bg-upload" accept="image/*" style="display:none" onchange="handleBgUpload('srv', this)">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">image</i> 上传背景图
+                            </label>
+                            <button class="secondary-button" id="srv-bg-clear" style="display:none;width:auto;padding:6px 14px;font-size:13px;" onclick="clearBgImage('srv')">
+                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">close</i> 清除背景
                             </button>
                         </div>
                     </div>
-                    <!-- 右侧：配置面板 -->
+                    <!-- 右侧：配置面板 (设备直连) -->
                     <div class="info-config-panel">
                         <div class="settings-section">
                             <div class="section-header">
                                 <i class="material-icons">monitor_heart</i>
-                                <span>服务器监控配置</span>
+                                <span>服务器监控配置 (设备直连)</span>
                             </div>
                             <div class="section-content">
-                                <div class="network-switch-row">
-                                    <span class="network-label">启用服务器监控</span>
-                                    <label class="switch">
-                                        <input type="checkbox" id="cloud-srv-enabled" onchange="scheduleCloudSave()">
-                                        <span class="slider-toggle"></span>
-                                    </label>
+                                <div class="network-input-group">
+                                    <label class="network-label">显示名称 (仅预览用)</label>
+                                    <input type="text" id="cloud-srv-label" oninput="srvPreviewRender()" placeholder="My Server">
                                 </div>
                                 <div class="network-input-group">
-                                    <label class="network-label">服务器名称</label>
-                                    <input type="text" id="cloud-srv-label" oninput="scheduleCloudSave(); srvPreviewRender();" placeholder="My Server">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">监控 API URL</label>
-                                    <input type="text" id="cloud-srv-url" oninput="scheduleCloudSave()" placeholder="https://server.example.com/api/stats">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">CPU JSONPath</label>
-                                    <input type="text" id="cloud-srv-cpu-path" oninput="scheduleCloudSave()" placeholder="$.cpu.usage">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">内存 JSONPath</label>
-                                    <input type="text" id="cloud-srv-mem-path" oninput="scheduleCloudSave()" placeholder="$.memory.used_percent">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">磁盘 JSONPath</label>
-                                    <input type="text" id="cloud-srv-disk-path" oninput="scheduleCloudSave()" placeholder="$.disk.used_percent">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">网络上行 JSONPath</label>
-                                    <input type="text" id="cloud-srv-up-path" oninput="scheduleCloudSave()" placeholder="$.network.up">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">网络下行 JSONPath</label>
-                                    <input type="text" id="cloud-srv-down-path" oninput="scheduleCloudSave()" placeholder="$.network.down">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">运行时间 JSONPath</label>
-                                    <input type="text" id="cloud-srv-uptime-path" oninput="scheduleCloudSave()" placeholder="$.uptime">
+                                    <label class="network-label">服务器监控 API URL</label>
+                                    <input type="text" id="info-srv-url-input" placeholder="https://server.example.com/api/stats">
+                                    <div class="setting-desc">设备直接 GET 该 URL, 解析 cpu/mem/disk/net_up/net_down/uptime 字段</div>
                                 </div>
                                 <div class="network-btn-row">
-                                    <button class="secondary-button" onclick="cloudSrvQuery()">
-                                        <i class="material-icons">play_arrow</i> 立即查询
+                                    <button class="secondary-button" onclick="applyInfoSrvUrl()" style="width:100%;">
+                                        <i class="material-icons">check</i> 下发到设备
                                     </button>
                                 </div>
                                 <div class="wifi-status-row">

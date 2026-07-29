@@ -72,18 +72,26 @@ const BLE_FILM_TRANS_CH_CTRL_WIFI_CLEAR = 0x3B;
 const BLE_FILM_TRANS_CH_CTRL_FILM_DOWNLOAD = 0x3C;
 const BLE_FILM_TRANS_CH_CTRL_FILM_DOWNLOAD_STATE = 0x3D;
 
-// 信息墙控制 (Pro 固件 v0.3 新增)
+// 信息墙控制 (Pro 固件 v0.3 新增 - 设备直连)
 const BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE = 0x3E;          // 信息墙开关 (0/1)
 const BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET = 0x3F;       // 查询信息墙开关
-const BLE_FILM_TRANS_CH_CTRL_INFO_API_URL = 0x40;          // 设置云函数 HTTP URL (string)
-const BLE_FILM_TRANS_CH_CTRL_INFO_API_URL_GET = 0x41;      // 查询云函数 URL
-const BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN = 0x42;            // 设置 token (string)
-const BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN_GET = 0x43;        // 查询 token
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL = 0x40;           // 设置 MC API URL (string)
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET = 0x41;       // 查询 MC API URL
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL = 0x42;           // 设置 AI API URL (string)
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET = 0x43;       // 查询 AI API URL
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH = 0x44;          // 立即触发一次刷新 (无 data)
-const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE = 0x45;             // 切换显示页 (0=MC, 1=AI)
+const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE = 0x45;             // 切换显示页 (0=MC, 1=AI, 2=SRV)
 const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET = 0x46;         // 查询当前页
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN = 0x47;      // 设置刷新间隔 (uint16, 分钟)
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET = 0x48;  // 查询刷新间隔
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN = 0x49;         // 设置 AI API Token (string)
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET = 0x4A;     // 查询 AI API Token
+const BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL = 0x4B;          // 设置服务器监控 API URL (string)
+const BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET = 0x4C;      // 查询服务器监控 API URL
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST = 0x4D;          // 设置 MC 服务器主机 (string, SLP 直连)
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET = 0x4E;      // 查询 MC 服务器主机
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT = 0x4F;          // 设置 MC 服务器端口 (uint16)
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET = 0x50;      // 查询 MC 服务器端口
 
 const BLE_CMD_LEN_MIN = 4;
 
@@ -970,11 +978,15 @@ function setupBluetoothListener() {
             console.log(`下载状态: state=${state}, progress=${progress}%`);
             updateDownloadStatus(state, progress);
         }
-        // 信息墙 (0x3E-0x48) - 转给 info.js 处理
+        // 信息墙 (0x3E-0x50) - 设备直连, 转给 info.js 处理
         else if (data[0] === BLE_CMD_HEAD && (
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET ||
-            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_API_URL_GET ||
-            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET
         )) {

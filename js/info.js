@@ -1,19 +1,21 @@
-// ForFilm 信息墙 (Pro 固件专用)
-// 通过 BLE 0x3E-0x48 控制设备信息墙
-// 通过云函数 HTTP 接口管理后端配置 (MC 服务器 / AI Token)
-// 含 E-paper 预览 Canvas 渲染 + 布局编辑器
-
-// ===== 云函数状态 =====
-let infoCloudUrl = '';
-let infoEspToken = '';
-let infoCloudSaveTimer = null;
+// ForFilm 信息墙 (Pro 固件专用 - 设备直连)
+// 通过 BLE 0x3E-0x4C 控制设备信息墙, 设备直接请求 MC/AI/SRV API
+// 含 E-paper 预览 Canvas 渲染 + 背景图支持
 
 // ===== 设备端信息墙状态 =====
 let deviceInfoEnable = 0;
-let deviceInfoApiUrl = '';
-let deviceInfoToken = '';
+let deviceInfoMcHost = '';
+let deviceInfoMcPort = 25565;
+let deviceInfoMcUrl = '';
+let deviceInfoAiUrl = '';
+let deviceInfoAiToken = '';
+let deviceInfoSrvUrl = '';
 let deviceInfoRefreshMin = 0;
 let deviceInfoPage = 0;
+
+// ===== 背景图管理 =====
+const bgImages = { mc: null, ai: null, srv: null };
+const bgCache = {};
 
 // ===== E-paper 调色板 (6色, 匹配固件) =====
 const PALETTE = {
@@ -24,6 +26,95 @@ const PALETTE = {
     0x05: '#2980b9', // Blue
     0x06: '#27ae60', // Green
 };
+
+// ===== 颜色映射到6色调色板 =====
+function mapToPalette(r, g, b) {
+    const colors = [
+        { id: 0x00, r: 26, g: 26, b: 26 },
+        { id: 0x01, r: 232, g: 228, b: 224 },
+        { id: 0x02, r: 212, g: 165, b: 32 },
+        { id: 0x03, r: 192, g: 57, b: 43 },
+        { id: 0x05, r: 41, g: 128, b: 185 },
+        { id: 0x06, r: 39, g: 174, b: 96 },
+    ];
+    let minDist = Infinity, closest = 0x01;
+    for (const c of colors) {
+        const dr = r - c.r, dg = g - c.g, db = b - c.b;
+        const dist = dr * dr + dg * dg + db * db;
+        if (dist < minDist) { minDist = dist; closest = c.id; }
+    }
+    return closest;
+}
+
+// ===== 背景图上传处理 =====
+function handleBgUpload(page, input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        bgImages[page] = e.target.result;
+        delete bgCache[page];
+        document.getElementById(page + '-bg-clear').style.display = 'inline-flex';
+        if (page === 'mc') mcPreviewRender();
+        else if (page === 'ai') aiPreviewRender();
+        else if (page === 'srv') srvPreviewRender();
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearBgImage(page) {
+    bgImages[page] = null;
+    delete bgCache[page];
+    document.getElementById(page + '-bg-upload').value = '';
+    document.getElementById(page + '-bg-clear').style.display = 'none';
+    if (page === 'mc') mcPreviewRender();
+    else if (page === 'ai') aiPreviewRender();
+    else if (page === 'srv') srvPreviewRender();
+}
+
+async function getProcessedBg(page) {
+    if (bgCache[page]) return bgCache[page];
+    if (!bgImages[page]) return null;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 792; tempCanvas.height = 528;
+    const tempCtx = tempCanvas.getContext('2d');
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = bgImages[page];
+    return new Promise(function(resolve) {
+        img.onload = function() {
+            const imgRatio = img.width / img.height;
+            const targetRatio = 792 / 528;
+            let sx, sy, sw, sh;
+            if (imgRatio > targetRatio) {
+                sh = img.height;
+                sw = img.height * targetRatio;
+                sx = (img.width - sw) / 2;
+                sy = 0;
+            } else {
+                sw = img.width;
+                sh = img.width / targetRatio;
+                sx = 0;
+                sy = (img.height - sh) / 2;
+            }
+            tempCtx.drawImage(img, sx, sy, sw, sh, 0, 0, 792, 528);
+            const imgData = tempCtx.getImageData(0, 0, 792, 528);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const mapped = mapToPalette(data[i], data[i+1], data[i+2]);
+                const c = PALETTE[mapped];
+                data[i] = parseInt(c.slice(1,3),16);
+                data[i+1] = parseInt(c.slice(3,5),16);
+                data[i+2] = parseInt(c.slice(5,7),16);
+                data[i+3] = 255;
+            }
+            tempCtx.putImageData(imgData, 0, 0);
+            bgCache[page] = tempCanvas;
+            resolve(tempCanvas);
+        };
+        img.onerror = function() { resolve(null); };
+    });
+}
 
 // ===== EpdRenderer =====
 const EpdRenderer = {
@@ -104,6 +195,11 @@ const EpdRenderer = {
         this.ctx.fillText(initial, x + r, y + r + 1);
         this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'top';
     },
+    drawCanvas(srcCanvas, x, y, w, h) {
+        if (!srcCanvas) return;
+        if (w && h) this.ctx.drawImage(srcCanvas, x, y, w, h);
+        else this.ctx.drawImage(srcCanvas, x, y);
+    },
     fillRoundRect(x, y, w, h, radius, color) {
         const c = (typeof color === 'number' ? (PALETTE[color] || PALETTE[0x01]) : color);
         const r = radius;
@@ -168,6 +264,31 @@ const EpdRenderer = {
         const sc = scale || 1;
         this.ctx.font = (sc * 6.5) + 'px Consolas, monospace';
         return this.ctx.measureText(s).width;
+    },
+    drawImage(imgData) {
+        if (!imgData) return;
+        const img = new Image();
+        img.onload = () => {
+            this.ctx.drawImage(img, 0, 0, this.W, this.H);
+        };
+        img.src = imgData;
+    },
+    drawCard(x, y, w, h, r, bg, border) {
+        const bgc = (typeof bg === 'number' ? (PALETTE[bg] || PALETTE[0x01]) : bg);
+        const bdc = (typeof border === 'number' ? (PALETTE[border] || PALETTE[0x01]) : border);
+        this.fillRoundRect(x, y, w, h, r, bgc);
+        this.drawRoundRect(x, y, w, h, r, bdc);
+    },
+    drawProgressBar(x, y, w, h, r, ratio, color) {
+        if (ratio === 0) ratio = 1;
+        if (ratio > 100) ratio = 100;
+        this.fillRoundRect(x, y, w, h, r, PALETTE[0x00]);
+        const fillW = Math.max(2, Math.floor((w - 2) * ratio / 100));
+        let barColor = color;
+        if (ratio > 85) barColor = 0x03;
+        else if (ratio > 70) barColor = 0x02;
+        const bc = (typeof barColor === 'number' ? (PALETTE[barColor] || PALETTE[0x01]) : barColor);
+        this.fillRoundRect(x + 1, y + 1, fillW, h - 2, Math.max(1, r - 1), bc);
     }
 };
 
@@ -292,17 +413,86 @@ function resetLayoutToDefault() {
     renderLayoutEditor();
 }
 
+// ===== Mojang 皮肤获取 =====
+const skinCache = {};
+
+async function fetchMojangSkin(username) {
+    if (skinCache[username]) return skinCache[username];
+    try {
+        // 1. 获取 UUID
+        const uuidRes = await fetch('https://api.mojang.com/users/profiles/minecraft/' + encodeURIComponent(username));
+        if (!uuidRes.ok) return null;
+        const uuidData = await uuidRes.json();
+        const uuid = uuidData.id;
+        // 2. 获取皮肤 URL
+        const profileRes = await fetch('https://sessionserver.mojang.com/session/minecraft/profile/' + uuid);
+        if (!profileRes.ok) return null;
+        const profile = await profileRes.json();
+        const skinProp = profile.properties.find(p => p.name === 'textures');
+        if (!skinProp) return null;
+        const textures = JSON.parse(decodeURIComponent(skinProp.value));
+        const skinUrl = textures.SKIN.url;
+        // 3. 加载皮肤图片
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = skinUrl;
+        await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error('Skin image load failed'));
+        });
+        skinCache[username] = img;
+        return img;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function processSkinHead(skinImg, size) {
+    const headCanvas = document.createElement('canvas');
+    headCanvas.width = size;
+    headCanvas.height = size;
+    const ctx = headCanvas.getContext('2d');
+    // 皮肤头部区域: 左上角 8x8 像素, 用最近邻插值放大
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(skinImg, 0, 0, 8, 8, 0, 0, size, size);
+    // 离散化到 6 色调色板
+    const imgData = ctx.getImageData(0, 0, size, size);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const mapped = mapToPalette(data[i], data[i+1], data[i+2]);
+        const c = PALETTE[mapped];
+        data[i] = parseInt(c.slice(1,3),16);
+        data[i+1] = parseInt(c.slice(3,5),16);
+        data[i+2] = parseInt(c.slice(5,7),16);
+        data[i+3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return headCanvas;
+}
+
+async function getSkinHeadForPlayer(username, size) {
+    const cacheKey = username + '_' + size;
+    if (skinCache['processed_' + cacheKey]) return skinCache['processed_' + cacheKey];
+    const skinImg = await fetchMojangSkin(username);
+    if (!skinImg) return null;
+    const processed = await processSkinHead(skinImg, size);
+    skinCache['processed_' + cacheKey] = processed;
+    return processed;
+}
+
 // ===== 模拟数据 =====
-const MC_SAMPLE_PLAYERS = ["Steve", "Alex", "Notch", "Dream", "Phil", "Karl", "Luna", "Mika"];
-const AVATAR_COLORS = [0x05, 0x06, 0x02, 0x03, 0x00, 0x05, 0x06, 0x02];
+const MC_SAMPLE_PLAYERS = ["Steve", "Alex", "Notch", "Dream", "Phil", "Karl", "Luna", "Mika", "Emma", "Jack", "Lily", "Max", "Zoe", "Leo", "Mia"];
+const AVATAR_COLORS = [0x05, 0x06, 0x02, 0x03, 0x00, 0x05, 0x06, 0x02, 0x03, 0x00, 0x05, 0x06, 0x02, 0x03, 0x00];
 
 function getMcMockData() {
     return {
-        host: (document.getElementById('cloud-mc-host') || {}).value || 'mc.example.com',
+        host: (document.getElementById('info-mc-host-input') || {}).value || 'mc.example.com',
+        name: 'My Survival Server',
         status: 'ONLINE',
-        players_online: 5,
+        players_online: 12,
         players_max: 20,
-        version: '1.21.1'
+        version: '1.21.1',
+        motd: 'Welcome to our Minecraft Server!\nSurvival gameplay with friends\nJoin us at play.example.com'
     };
 }
 
@@ -404,28 +594,50 @@ function renderAiElements(R, ai, layout, darkMode) {
 }
 
 // ===== MC 预览渲染 =====
-function mcPreviewRender() {
+async function mcPreviewRender() {
     if (!EpdRenderer.init('mc-preview-canvas')) return;
-    const style = getPreviewStyle();
     const mc = getMcMockData();
     const showPlayers = getMcShowPlayers();
     const R = EpdRenderer;
-    const layout = mcLayout;
 
-    if (style === 'dark') mcPreviewDark(R, mc, showPlayers, layout);
-    else if (style === 'gradient') mcPreviewGradient(R, mc, showPlayers, layout);
-    else if (style === 'card') mcPreviewCard(R, mc, showPlayers, layout);
-    else if (style === 'pixel') mcPreviewPixel(R, mc, showPlayers, layout);
-    else if (style === 'classic') mcPreviewClassic(R, mc, showPlayers, layout);
-    else mcPreviewElegant(R, mc, showPlayers, layout);
-}
+    if (showPlayers) {
+        // 获取所有玩家的皮肤头像
+        const headSize = 120;
+        const skinHeads = {};
+        const playerCount = Math.min(mc.players_online, MC_SAMPLE_PLAYERS.length);
+        // 尝试获取皮肤（后台加载，不阻塞）
+        for (let i = 0; i < playerCount; i++) {
+            const username = MC_SAMPLE_PLAYERS[i];
+            const head = await getSkinHeadForPlayer(username, headSize);
+            if (head) skinHeads[username] = head;
+        }
 
-function mcPreviewClassic(R, mc, showPlayers, layout) {
-    R.clear(0x01);
-    if (layout.headerBar && layout.headerBar.visible) {
-        R.fillRect(layout.headerBar.x || 0, layout.headerBar.y, 792, layout.headerBar.h, 0x00);
+        // 绘制背景图（如果有）
+        const bgCanvas = await getProcessedBg('mc');
+        if (bgCanvas) {
+            R.ctx.drawImage(bgCanvas, 0, 0);
+            R.ctx.globalAlpha = 0.45;
+            R.ctx.fillStyle = PALETTE[0x01];
+            R.ctx.fillRect(0, 0, 792, 528);
+            R.ctx.globalAlpha = 1.0;
+        } else {
+            R.clear(0x01);
+        }
+        mcPreviewAvatarGrid(R, mc, skinHeads, !!bgCanvas);
+    } else {
+        // 绘制背景图（如果有）
+        const bgCanvas = await getProcessedBg('mc');
+        if (bgCanvas) {
+            R.ctx.drawImage(bgCanvas, 0, 0);
+            R.ctx.globalAlpha = 0.45;
+            R.ctx.fillStyle = PALETTE[0x01];
+            R.ctx.fillRect(0, 0, 792, 528);
+            R.ctx.globalAlpha = 1.0;
+        } else {
+            R.clear(0x01);
+        }
+        mcPreviewModern(R, mc, showPlayers);
     }
-    renderMcElements(R, mc, showPlayers, layout, false);
 }
 
 function mcPreviewGradient(R, mc, showPlayers, layout) {
@@ -675,19 +887,24 @@ function drawPlayerAvatars(R, x, y, size, gap, darkMode) {
 }
 
 // ===== AI 预览渲染 =====
-function aiPreviewRender() {
+async function aiPreviewRender() {
     if (!EpdRenderer.init('ai-preview-canvas')) return;
-    const style = getAiPreviewStyle();
     const ai = getAiMockData();
     const R = EpdRenderer;
-    const layout = aiLayout;
 
-    if (style === 'dark') aiPreviewDark(R, ai, layout);
-    else if (style === 'gradient') aiPreviewGradient(R, ai, layout);
-    else if (style === 'card') aiPreviewCard(R, ai, layout);
-    else if (style === 'pixel') aiPreviewPixel(R, ai, layout);
-    else if (style === 'classic') aiPreviewClassic(R, ai, layout);
-    else aiPreviewElegant(R, ai, layout);
+    // 绘制背景图（如果有）
+    const bgCanvas = await getProcessedBg('ai');
+    if (bgCanvas) {
+        R.ctx.drawImage(bgCanvas, 0, 0);
+        R.ctx.globalAlpha = 0.45;
+        R.ctx.fillStyle = PALETTE[0x01];
+        R.ctx.fillRect(0, 0, 792, 528);
+        R.ctx.globalAlpha = 1.0;
+    } else {
+        R.clear(0x01);
+    }
+
+    aiPreviewModern(R, ai);
 }
 
 function aiPreviewClassic(R, ai, layout) {
@@ -758,181 +975,17 @@ function aiPreviewDark(R, ai, layout) {
     renderAiElements(R, ai, layout, true);
 }
 
-// ===== 云函数 HTTP 接口 =====
-function getInfoCloudBase() {
-    return (document.getElementById('cloud-function-url-input') || {}).value || '';
-}
-
-async function cloudCall(action, method, body) {
-    const base = getInfoCloudBase().trim();
-    if (!base) throw new Error('请填写云函数 URL');
-    const url = new URL(base);
-    url.searchParams.set('action', action);
-    if (infoEspToken) url.searchParams.set('token', infoEspToken);
-    const init = { method: method || 'GET' };
-    if (method === 'POST' && body) {
-        init.headers = { 'Content-Type': 'application/json' };
-        init.body = JSON.stringify(body);
-    }
-    const resp = await fetch(url.toString(), init);
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); } catch (e) { data = { ok: false, error: text }; }
-    if (!data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-    return data.data;
-}
-
-async function loadCloudConfig() {
-    try {
-        setInfoStatus('读取云端配置...');
-        infoCloudUrl = getInfoCloudBase();
-        const cfg = await cloudCall('getConfig', 'GET');
-        if (cfg.mc) {
-            const mcE = document.getElementById('cloud-mc-enabled');
-            if (mcE) mcE.checked = !!cfg.mc.enabled;
-            const el = document.getElementById('cloud-mc-method');
-            if (el) el.value = cfg.mc.method || 'slp';
-            const el2 = document.getElementById('cloud-mc-host');
-            if (el2) el2.value = cfg.mc.host || '';
-            const el3 = document.getElementById('cloud-mc-port');
-            if (el3) el3.value = cfg.mc.port || 25565;
-            const el4 = document.getElementById('cloud-mc-http-url');
-            if (el4) el4.value = cfg.mc.http_url || '';
-            const el5 = document.getElementById('cloud-mc-http-json-path');
-            if (el5) el5.value = cfg.mc.http_json_path || '';
-        }
-        if (cfg.ai) {
-            const el = document.getElementById('cloud-ai-enabled');
-            if (el) el.checked = !!cfg.ai.enabled;
-            const el2 = document.getElementById('cloud-ai-label');
-            if (el2) el2.value = cfg.ai.label || '';
-            const el3 = document.getElementById('cloud-ai-url');
-            if (el3) el3.value = cfg.ai.url || '';
-            const el4 = document.getElementById('cloud-ai-method');
-            if (el4) el4.value = cfg.ai.method || 'GET';
-            const el5 = document.getElementById('cloud-ai-headers');
-            if (el5) el5.value = cfg.ai.headers || '';
-            const el6 = document.getElementById('cloud-ai-body');
-            if (el6) el6.value = cfg.ai.body || '';
-            const el7 = document.getElementById('cloud-ai-json-path');
-            if (el7) el7.value = cfg.ai.json_path || '';
-        }
-        if (cfg.srv) {
-            const sE = document.getElementById('cloud-srv-enabled');
-            if (sE) sE.checked = !!cfg.srv.enabled;
-            const s1 = document.getElementById('cloud-srv-label');
-            if (s1) s1.value = cfg.srv.label || '';
-            const s2 = document.getElementById('cloud-srv-url');
-            if (s2) s2.value = cfg.srv.url || '';
-            const s3 = document.getElementById('cloud-srv-cpu-path');
-            if (s3) s3.value = cfg.srv.cpu_path || '';
-            const s4 = document.getElementById('cloud-srv-mem-path');
-            if (s4) s4.value = cfg.srv.mem_path || '';
-            const s5 = document.getElementById('cloud-srv-disk-path');
-            if (s5) s5.value = cfg.srv.disk_path || '';
-            const s6 = document.getElementById('cloud-srv-up-path');
-            if (s6) s6.value = cfg.srv.up_path || '';
-            const s7 = document.getElementById('cloud-srv-down-path');
-            if (s7) s7.value = cfg.srv.down_path || '';
-            const s8 = document.getElementById('cloud-srv-uptime-path');
-            if (s8) s8.value = cfg.srv.uptime_path || '';
-        }
-        setInfoStatus('云端配置已加载');
-        mcPreviewRender(); aiPreviewRender(); srvPreviewRender();
-    } catch (err) {
-        setInfoStatus('读取失败: ' + err.message, true);
-    }
-}
-
-function gatherCloudConfig() {
-    return {
-        mc: {
-            enabled: document.getElementById('cloud-mc-enabled').checked,
-            method: document.getElementById('cloud-mc-method').value,
-            host: document.getElementById('cloud-mc-host').value.trim(),
-            port: parseInt(document.getElementById('cloud-mc-port').value, 10) || 25565,
-            http_url: document.getElementById('cloud-mc-http-url').value.trim(),
-            http_json_path: document.getElementById('cloud-mc-http-json-path').value.trim()
-        },
-        ai: {
-            enabled: document.getElementById('cloud-ai-enabled').checked,
-            label: document.getElementById('cloud-ai-label').value.trim(),
-            url: document.getElementById('cloud-ai-url').value.trim(),
-            method: document.getElementById('cloud-ai-method').value,
-            headers: document.getElementById('cloud-ai-headers').value,
-            body: document.getElementById('cloud-ai-body').value,
-            json_path: document.getElementById('cloud-ai-json-path').value.trim()
-        },
-        srv: {
-            enabled: document.getElementById('cloud-srv-enabled').checked,
-            label: document.getElementById('cloud-srv-label').value.trim(),
-            url: document.getElementById('cloud-srv-url').value.trim(),
-            cpu_path: document.getElementById('cloud-srv-cpu-path').value.trim(),
-            mem_path: document.getElementById('cloud-srv-mem-path').value.trim(),
-            disk_path: document.getElementById('cloud-srv-disk-path').value.trim(),
-            up_path: document.getElementById('cloud-srv-up-path').value.trim(),
-            down_path: document.getElementById('cloud-srv-down-path').value.trim(),
-            uptime_path: document.getElementById('cloud-srv-uptime-path').value.trim()
-        }
-    };
-}
-
-async function saveCloudConfig() {
-    try {
-        setInfoStatus('保存中...');
-        await cloudCall('setConfig', 'POST', gatherCloudConfig());
-        setInfoStatus('云端配置已保存');
-    } catch (err) {
-        setInfoStatus('保存失败: ' + err.message, true);
-    }
-}
-
-function scheduleCloudSave() {
-    if (infoCloudSaveTimer) clearTimeout(infoCloudSaveTimer);
-    infoCloudSaveTimer = setTimeout(saveCloudConfig, 1500);
-}
-
-async function rotateCloudToken() {
-    try {
-        setInfoStatus('重置 token...');
-        const r = await cloudCall('rotateToken', 'GET');
-        if (r && r.esp_token) {
-            infoEspToken = r.esp_token;
-            document.getElementById('cloud-esp-token-input').value = infoEspToken;
-            setInfoStatus('Token 已重置, 请重新下发到设备');
-        }
-    } catch (err) {
-        setInfoStatus('重置失败: ' + err.message, true);
-    }
-}
-
-async function cloudMcPing() {
-    try {
-        setMcStatus('正在 ping...');
-        const r = await cloudCall('mcPing', 'GET');
-        setMcStatus('MC ' + (r.online ? '在线' : '离线') + ' (' + r.players_online + '/' + r.players_max + ')');
-    } catch (err) {
-        setMcStatus('ping 失败: ' + err.message, true);
-    }
-}
-
-async function cloudAiQuery() {
-    try {
-        setAiStatus('正在查询...');
-        const r = await cloudCall('aiTokenQuery', 'GET');
-        setAiStatus('余额: ' + r.balance + (r.error ? ' (错误: ' + r.error + ')' : ''));
-    } catch (err) {
-        setAiStatus('查询失败: ' + err.message, true);
-    }
-}
-
-// ===== 设备端 BLE 读写 =====
+// ===== 设备直连 BLE 读写 =====
 function loadDeviceInfoConfig() {
     if (!device) return;
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET, null))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET, null)))
-        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_API_URL_GET, null)))
-        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET, null)))
         .catch(err => console.warn('read info config from device failed', err));
 }
@@ -944,27 +997,78 @@ function toggleInfoSwitch() {
         .catch(err => setInfoStatus('失败: ' + err.message, true));
 }
 
-function applyInfoApiUrl() {
-    const url = document.getElementById('info-api-url-input').value.trim();
-    if (!url) { setInfoStatus('URL 为空', true); return; }
-    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_API_URL, url, 192);
-    queueBleCmd(() => sendBlePacket(pkt))
-        .then(() => { deviceInfoApiUrl = url; setInfoStatus('URL 已下发'); })
-        .catch(err => setInfoStatus('失败: ' + err.message, true));
+// 下发 MC 服务器 host:port 到设备 (SLP 直连)
+function applyInfoMcHost() {
+    const host = document.getElementById('info-mc-host-input').value.trim();
+    const portVal = parseInt(document.getElementById('info-mc-port-input').value, 10) || 25565;
+    if (!host) { setMcStatus('host 为空', true); return; }
+    if (host.length > 63) { setMcStatus('host 过长 (>63)', true); return; }
+    if (portVal < 1 || portVal > 65535) { setMcStatus('端口范围 1-65535', true); return; }
+    /* 先下发 host */
+    const hostPkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST, host, 64);
+    queueBleCmd(() => sendBlePacket(hostPkt))
+        .then(() => {
+            deviceInfoMcHost = host;
+            /* 再下发 port (uint16 big-endian) */
+            const portData = new Uint8Array(2);
+            portData[0] = (portVal >> 8) & 0xFF;
+            portData[1] = portVal & 0xFF;
+            return queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT, portData));
+        })
+        .then(() => {
+            deviceInfoMcPort = portVal;
+            setMcStatus('SLP host:port 已下发 (' + host + ':' + portVal + ')');
+        })
+        .catch(err => setMcStatus('失败: ' + err.message, true));
 }
 
-function applyInfoToken() {
-    const tok = document.getElementById('info-token-input').value.trim();
-    if (!tok) { setInfoStatus('Token 为空', true); return; }
-    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN, tok, 40);
+// 下发 MC HTTP API URL 到设备 (可选兜底)
+function applyInfoMcUrl() {
+    const url = document.getElementById('info-mc-url-input').value.trim();
+    if (!url) { setMcStatus('URL 为空 (留空则仅用 SLP)', false); return; }
+    if (url.length > 192) { setMcStatus('URL 过长 (>192)', true); return; }
+    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL, url, 192);
     queueBleCmd(() => sendBlePacket(pkt))
-        .then(() => { deviceInfoToken = tok; setInfoStatus('Token 已下发'); })
-        .catch(err => setInfoStatus('失败: ' + err.message, true));
+        .then(() => { deviceInfoMcUrl = url; setMcStatus('MC HTTP URL 已下发 (' + url.length + ' 字符)'); })
+        .catch(err => setMcStatus('失败: ' + err.message, true));
+}
+
+// 下发 AI 余额查询 URL 到设备
+function applyInfoAiUrl() {
+    const url = document.getElementById('info-ai-url-input').value.trim();
+    if (!url) { setAiStatus('URL 为空', true); return; }
+    if (url.length > 192) { setAiStatus('URL 过长 (>192)', true); return; }
+    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL, url, 192);
+    queueBleCmd(() => sendBlePacket(pkt))
+        .then(() => { deviceInfoAiUrl = url; setAiStatus('AI URL 已下发 (' + url.length + ' 字符)'); })
+        .catch(err => setAiStatus('失败: ' + err.message, true));
+}
+
+// 下发 AI API Token 到设备
+function applyInfoAiToken() {
+    const tok = document.getElementById('info-ai-token-input').value.trim();
+    if (!tok) { setAiStatus('Token 为空', true); return; }
+    if (tok.length > 64) { setAiStatus('Token 过长 (>64)', true); return; }
+    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN, tok, 64);
+    queueBleCmd(() => sendBlePacket(pkt))
+        .then(() => { deviceInfoAiToken = tok; setAiStatus('AI Token 已下发 (' + tok.length + ' 字符)'); })
+        .catch(err => setAiStatus('失败: ' + err.message, true));
+}
+
+// 下发服务器监控 API URL 到设备
+function applyInfoSrvUrl() {
+    const url = document.getElementById('info-srv-url-input').value.trim();
+    if (!url) { setSrvStatus('URL 为空', true); return; }
+    if (url.length > 192) { setSrvStatus('URL 过长 (>192)', true); return; }
+    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL, url, 192);
+    queueBleCmd(() => sendBlePacket(pkt))
+        .then(() => { deviceInfoSrvUrl = url; setSrvStatus('SRV URL 已下发 (' + url.length + ' 字符)'); })
+        .catch(err => setSrvStatus('失败: ' + err.message, true));
 }
 
 function onInfoRefresh() {
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH, null))
-        .then(() => setInfoStatus('已触发刷新'))
+        .then(() => setInfoStatus('已触发刷新, 设备将直接请求 API'))
         .catch(err => setInfoStatus('失败: ' + err.message, true));
 }
 
@@ -979,22 +1083,7 @@ function applyMcRefreshMin() {
     const data = new Uint8Array(2);
     data[0] = (v >> 8) & 0xFF; data[1] = v & 0xFF;
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN, data))
-        .then(() => { deviceInfoRefreshMin = v; setInfoStatus('MC 刷新间隔: ' + v + ' 分钟'); })
-        .catch(err => setInfoStatus('失败: ' + err.message, true));
-}
-
-function updateAiRefreshSlider() {
-    const v = parseInt(document.getElementById('ai-refresh-min').value, 10) || 30;
-    const el = document.getElementById('ai-refresh-value');
-    if (el) el.textContent = v + '分钟';
-}
-
-function applyAiRefreshMin() {
-    const v = parseInt(document.getElementById('ai-refresh-min').value, 10) || 30;
-    const data = new Uint8Array(2);
-    data[0] = (v >> 8) & 0xFF; data[1] = v & 0xFF;
-    queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN, data))
-        .then(() => { deviceInfoRefreshMin = v; setInfoStatus('AI 刷新间隔: ' + v + ' 分钟'); })
+        .then(() => { deviceInfoRefreshMin = v; setInfoStatus('刷新间隔: ' + v + ' 分钟'); })
         .catch(err => setInfoStatus('失败: ' + err.message, true));
 }
 
@@ -1019,26 +1108,45 @@ function setAiStatus(text, isError) {
     el.style.color = isError ? '#D32F2F' : '#4CAF50';
 }
 
-// ===== 设备响应回填 =====
+// ===== 设备响应回填 (设备直连) =====
 function handleInfoWallResponse(cmdType, data) {
     if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET && data.length >= 4) {
         deviceInfoEnable = data[3];
         const sw = document.getElementById('info-enable-switch');
         if (sw) sw.checked = !!deviceInfoEnable;
-    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_API_URL_GET && data.length > 3) {
-        deviceInfoApiUrl = bytesToAsciiString(data, 3, data[2]);
-        const inp = document.getElementById('info-api-url-input');
-        if (inp) inp.value = deviceInfoApiUrl;
-    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_TOKEN_GET && data.length > 3) {
-        deviceInfoToken = bytesToAsciiString(data, 3, data[2]);
-        const inp = document.getElementById('info-token-input');
-        if (inp) inp.value = deviceInfoToken;
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET && data.length > 3) {
+        deviceInfoMcHost = bytesToAsciiString(data, 3, data[2]);
+        const inp = document.getElementById('info-mc-host-input');
+        if (inp) inp.value = deviceInfoMcHost;
+        setMcStatus('已读取设备 MC host: ' + deviceInfoMcHost);
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET && data.length >= 6) {
+        deviceInfoMcPort = (data[3] << 8) | data[4];
+        const inp = document.getElementById('info-mc-port-input');
+        if (inp) inp.value = deviceInfoMcPort;
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET && data.length > 3) {
+        deviceInfoMcUrl = bytesToAsciiString(data, 3, data[2]);
+        const inp = document.getElementById('info-mc-url-input');
+        if (inp) inp.value = deviceInfoMcUrl;
+        setMcStatus('已读取设备 MC HTTP URL (' + deviceInfoMcUrl.length + ' 字符)');
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET && data.length > 3) {
+        deviceInfoAiUrl = bytesToAsciiString(data, 3, data[2]);
+        const inp = document.getElementById('info-ai-url-input');
+        if (inp) inp.value = deviceInfoAiUrl;
+        setAiStatus('已读取设备 AI URL (' + deviceInfoAiUrl.length + ' 字符)');
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET && data.length > 3) {
+        deviceInfoAiToken = bytesToAsciiString(data, 3, data[2]);
+        const inp = document.getElementById('info-ai-token-input');
+        if (inp) inp.value = deviceInfoAiToken;
+        setAiStatus('已读取设备 AI Token (' + deviceInfoAiToken.length + ' 字符)');
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET && data.length > 3) {
+        deviceInfoSrvUrl = bytesToAsciiString(data, 3, data[2]);
+        const inp = document.getElementById('info-srv-url-input');
+        if (inp) inp.value = deviceInfoSrvUrl;
+        setSrvStatus('已读取设备 SRV URL (' + deviceInfoSrvUrl.length + ' 字符)');
     } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET && data.length >= 5) {
         deviceInfoRefreshMin = (data[3] << 8) | data[4];
         const mcSlider = document.getElementById('mc-refresh-min');
-        const aiSlider = document.getElementById('ai-refresh-min');
         if (mcSlider) { mcSlider.value = deviceInfoRefreshMin; updateMcRefreshSlider(); }
-        if (aiSlider) { aiSlider.value = deviceInfoRefreshMin; updateAiRefreshSlider(); }
     } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET && data.length >= 4) {
         deviceInfoPage = data[3];
     }
@@ -1063,7 +1171,7 @@ function setInfoSectionVisible(visible) {
 function initInfoPage() {
     mcPreviewRender(); aiPreviewRender(); srvPreviewRender();
 
-    const mcHostEl = document.getElementById('cloud-mc-host');
+    const mcHostEl = document.getElementById('info-mc-host-input');
     if (mcHostEl) mcHostEl.addEventListener('input', mcPreviewRender);
 
     const aiLabelEl = document.getElementById('cloud-ai-label');
@@ -1088,9 +1196,6 @@ function initInfoPage() {
 
     const mcSlider = document.getElementById('mc-refresh-min');
     if (mcSlider) mcSlider.addEventListener('input', updateMcRefreshSlider);
-
-    const aiSlider = document.getElementById('ai-refresh-min');
-    if (aiSlider) aiSlider.addEventListener('input', updateAiRefreshSlider);
 }
 
 const _origInitBluetooth = window.initBluetooth;
@@ -1136,15 +1241,24 @@ function getSrvShowCores() {
 }
 
 // ===== 服务器监控渲染 =====
-function srvPreviewRender() {
+async function srvPreviewRender() {
     if (!EpdRenderer.init('srv-preview-canvas')) return;
-    const style = document.getElementById('srv-preview-style');
-    const sv = style ? style.value : 'elegant';
     const srv = getSrvMockData();
     const R = EpdRenderer;
-    if (sv === 'dark') srvPreviewDark(R, srv);
-    else if (sv === 'classic') srvPreviewClassic(R, srv);
-    else srvPreviewElegant(R, srv);
+
+    // 绘制背景图（如果有）
+    const bgCanvas = await getProcessedBg('srv');
+    if (bgCanvas) {
+        R.ctx.drawImage(bgCanvas, 0, 0);
+        R.ctx.globalAlpha = 0.45;
+        R.ctx.fillStyle = PALETTE[0x01];
+        R.ctx.fillRect(0, 0, 792, 528);
+        R.ctx.globalAlpha = 1.0;
+    } else {
+        R.clear(0x01);
+    }
+
+    srvPreviewModern(R, srv);
 }
 
 // ===== 服务器监控 - 优雅仪表盘 =====
@@ -1252,21 +1366,252 @@ function srvPreviewDark(R, srv) {
     });
 }
 
-// ===== 服务器监控云函数 =====
+// ===== 现代化风格（背景图 + 极简设计） =====
+function mcPreviewAvatarGrid(R, mc, skinHeads, hasBg) {
+    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
+    const totalW = 792, totalH = 528;
+    const headerH = 56;
+    const footerH = 28;
+    const mainH = totalH - headerH - footerH;
+    const footerY = headerH + mainH;
+    const playerCount = Math.min(mc.players_online, MC_SAMPLE_PLAYERS.length);
+    const count = Math.max(1, playerCount);
+
+    // 头部
+    if (!hasBg) R.clear(WHITE);
+    R.fillRect(0, 0, totalW, headerH, GREEN);
+    R.fillRect(0, footerY, totalW, footerH, YELLOW);
+    // 状态灯
+    const sc = mc.status === 'ONLINE' ? YELLOW : RED;
+    R.fillCircle(760, 20, 10, sc);
+    R.fillCircle(760, 20, 4, BLACK);
+    // 标题 + 玩家数
+    R.drawText(20, 8, 'MINECRAFT', WHITE, null, 3);
+    R.drawText(20, 34, String(playerCount) + '/' + String(mc.players_max) + ' ONLINE', WHITE, null, 1.5);
+    // 状态徽章
+    R.fillRoundRect(640, 6, 90, 22, 4, WHITE);
+    R.drawText(655, 10, mc.status, BLACK, null, 1.2);
+
+    // 固定 5×3 网格布局（最大15人）
+    const cols = 5, rows = 3;
+    const padX = 20, padY = 16;
+    const gapX = 16, gapY = 12;
+    const avatarW = Math.floor((totalW - padX * 2 - gapX * (cols - 1)) / cols);
+    const avatarH = Math.floor((mainH - padY * 2 - gapY * (rows - 1)) / rows);
+    const avatarSize = Math.min(avatarW, avatarH - 20); // 留20px给名字
+    const labelH = 18;
+
+    // 居中网格
+    const totalGridW = cols * avatarSize + (cols - 1) * gapX;
+    const offsetX = Math.floor((totalW - totalGridW) / 2);
+    const offsetY = headerH + padY;
+
+    // 绘制每个玩家
+    for (let i = 0; i < count; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const x = offsetX + col * (avatarSize + gapX);
+        const y = offsetY + row * (avatarSize + labelH + gapY);
+        const username = MC_SAMPLE_PLAYERS[i];
+
+        // 卡片边框
+        R.fillRoundRect(x, y, avatarSize, avatarSize + labelH, 4, BLACK);
+        // 头像背景
+        R.fillRoundRect(x + 2, y + 2, avatarSize - 4, avatarSize - 4, 3, WHITE);
+
+        // 皮肤头像或字母头像
+        const skinHead = skinHeads[username];
+        if (skinHead) {
+            R.drawCanvas(skinHead, x + 2, y + 2, avatarSize - 4, avatarSize - 4);
+        } else {
+            const initial = username.charAt(0).toUpperCase();
+            const color = AVATAR_COLORS[i % AVATAR_COLORS.length];
+            R.drawAvatar(x + 2, y + 2, avatarSize - 4, initial, color);
+        }
+
+        // 玩家名字（截断）
+        R.fillRoundRect(x + 2, y + avatarSize, avatarSize - 4, labelH - 2, 0, WHITE);
+        const displayName = username.length > 8 ? username.substring(0, 7) + '..' : username;
+        R.drawText(x + 4, y + avatarSize + 2, displayName, BLACK, null, 1);
+    }
+
+    // 底部
+    R.drawText(20, footerY + 6, formatTimestamp(), BLACK, null, 1);
+    R.drawTextRight(772, footerY + 6, 'FrameFilm Pro', BLUE, null, 1);
+}
+
+function mcPreviewModern(R, mc, showPlayers) {
+    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
+    R.clear(WHITE);
+    // 装饰竖条
+    R.fillRect(0, 0, 6, 528, GREEN);
+    R.fillRect(0, 524, 792, 4, YELLOW);
+
+    // === 头部区域 ===
+    const sc = mc.status === 'ONLINE' ? GREEN : (mc.status === 'WAITING' ? YELLOW : RED);
+    // 状态灯
+    R.fillCircle(772, 20, 8, sc);
+    R.fillCircle(772, 20, 3, WHITE);
+    // 页码
+    R.drawTextRight(772, 34, '1/3', BLACK, null, 1);
+    // 主标题
+    R.drawText(24, 28, 'MC', BLACK, null, 5);
+    R.drawText(24, 60, 'MINECRAFT SERVER', BLUE, null, 1.5);
+    // 状态徽章
+    R.drawBadge(682, 46, mc.status, WHITE, sc);
+    // 右上角在线人数
+    R.fillRoundRect(580, 6, 90, 40, 6, GREEN);
+    R.drawText(588, 10, 'ONLINE', WHITE, null, 1);
+    R.drawText(588, 24, String(mc.players_online) + '/' + String(mc.players_max), WHITE, null, 1.8);
+
+    // === 左侧：服务器图标区域 ===
+    const iconX = 30, iconY = 100, iconSize = 160;
+    // 图标背景框
+    R.fillRoundRect(iconX, iconY, iconSize, iconSize, 8, BLACK);
+    R.fillRoundRect(iconX + 4, iconY + 4, iconSize - 8, iconSize - 8, 6, WHITE);
+    // 服务器图标（如果有）或默认方块图标
+    if (mc.icon) {
+        R.drawCanvas(mc.icon, iconX + 4, iconY + 4, iconSize - 8, iconSize - 8);
+    } else {
+        // 默认 MC 方块图标
+        const blockSize = 32;
+        for (let by = 0; by < 4; by++) {
+            for (let bx = 0; bx < 4; bx++) {
+                const colors = [GREEN, BLUE, YELLOW, RED];
+                R.fillRect(iconX + 8 + bx * 38, iconY + 8 + by * 38, 36, 36, colors[(bx + by) % 4]);
+            }
+        }
+        R.drawText(iconX + 20, iconY + 70, 'MC', WHITE, null, 6);
+    }
+    // 服务器名称（图标下方）
+    R.drawText(iconX + 4, iconY + iconSize + 8, mc.name || 'Server', BLACK, null, 2);
+    R.drawText(iconX + 4, iconY + iconSize + 28, mc.host, BLUE, null, 1.2);
+
+    // === 右侧：服务器信息卡片 ===
+    const cardX = 210, cardW = 552;
+    // 版本
+    R.fillRoundRect(cardX, iconY, cardW, 48, 6, YELLOW);
+    R.drawText(cardX + 12, iconY + 8, 'VERSION', BLACK, null, 1.2);
+    R.drawText(cardX + 12, iconY + 26, 'v' + mc.version, BLACK, null, 2);
+    // 状态
+    R.fillRoundRect(cardX, iconY + 56, cardW, 48, 6, BLACK);
+    R.drawText(cardX + 12, iconY + 64, 'STATUS', WHITE, null, 1.2);
+    R.drawText(cardX + 12, iconY + 82, mc.status === 'ONLINE' ? '◆ Online - ' + mc.players_online + ' players' : '◇ Offline', GREEN, null, 1.5);
+    // Ping
+    R.fillRoundRect(cardX, iconY + 112, cardW, 40, 6, BLUE);
+    R.drawText(cardX + 12, iconY + 120, 'LATENCY', WHITE, null, 1.2);
+    R.drawText(cardX + 12, iconY + 136, 'Ping: ' + (Math.floor(Math.random() * 80) + 20) + 'ms', WHITE, null, 1.5);
+
+    // === 底部：服务器描述 MOTD ===
+    const motdY = 320;
+    R.fillRoundRect(24, motdY, 744, 180, 8, BLACK);
+    R.fillRoundRect(28, motdY + 4, 736, 172, 6, WHITE);
+    R.drawText(40, motdY + 12, 'SERVER MOTD', BLACK, null, 1.5);
+    R.drawHline(40, motdY + 32, 712, BLACK);
+    // MOTD 文本（模拟）
+    const motd = mc.motd || 'A Minecraft Server\nJoin us for an amazing experience!';
+    const lines = motd.split('\n');
+    let lineY = motdY + 44;
+    for (const line of lines.slice(0, 5)) {
+        R.drawText(40, lineY, line, BLUE, null, 1.5);
+        lineY += 26;
+    }
+
+    // 底部时间戳
+    R.drawText(24, 508, formatTimestamp(), BLACK, null, 1);
+    R.drawTextRight(768, 508, 'FrameFilm Pro', BLUE, null, 1);
+}
+
+function aiPreviewModern(R, ai) {
+    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
+    R.clear(WHITE);
+    R.fillRect(0, 0, 6, 528, BLUE);
+    R.fillRect(0, 524, 792, 4, GREEN);
+    R.fillCircle(772, 20, 8, GREEN);
+    R.fillCircle(772, 20, 3, WHITE);
+    R.drawTextRight(772, 34, '2/3', BLACK, null, 1);
+    R.drawText(24, 28, 'AI', BLACK, null, 5);
+    R.drawText(24, 60, ai.label.toUpperCase() + ' · TOKEN', BLUE, null, 1.5);
+    R.drawBadge(662, 46, ai.status, WHITE, ai.status === 'OK' ? GREEN : RED);
+    // 余额
+    const intPart = Math.floor(ai.balance);
+    const decPart = (ai.balance - intPart).toFixed(2).slice(1);
+    const intStr = intPart.toLocaleString();
+    R.fillRect(30, 130, 8, 180, BLUE);
+    R.drawText(52, 138, '¥', BLUE, null, 8);
+    const symW = R.measureText('¥', 8);
+    R.drawText(52 + symW + 8, 130, intStr, BLACK, null, 16);
+    const intW = R.measureText(intStr, 16);
+    R.drawText(52 + symW + 8 + intW + 8, 192, decPart, GREEN, null, 6);
+    R.drawText(52, 318, '◆ TOKEN BALANCE', GREEN, null, 1.5);
+    R.drawText(52, 336, 'Sufficient balance available', BLUE, null, 1);
+    // 进度
+    const usageRatio = Math.min(1, ai.balance / 5000);
+    R.drawText(52, 360, 'USAGE', BLACK, null, 1.2);
+    R.fillRoundRect(52, 380, 688, 14, 3, BLACK);
+    const fillW = Math.max(10, Math.floor(686 * usageRatio));
+    R.fillRoundRect(53, 381, fillW, 12, 2, usageRatio > 0.85 ? RED : (usageRatio > 0.7 ? YELLOW : GREEN));
+    R.drawText(52, 400, '¥0', BLACK, null, 1);
+    R.drawTextRight(740, 400, '¥5,000', BLACK, null, 1);
+    let tipColor = GREEN, tip = '◆ BALANCE NORMAL';
+    if (ai.balance < 100) { tipColor = RED; tip = '! LOW BALANCE - Please recharge'; }
+    else if (ai.balance < 500) { tipColor = YELLOW; tip = '△ BALANCE MODERATE'; }
+    R.drawTextCenter(396, 440, tip, tipColor, null, 1.5);
+    R.drawText(24, 498, formatTimestamp(), BLACK, null, 1);
+    R.drawTextRight(768, 498, ai.label, BLUE, null, 1);
+}
+
+function srvPreviewModern(R, srv) {
+    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
+    R.clear(WHITE);
+    R.fillRect(0, 0, 6, 528, RED);
+    R.fillRect(0, 524, 792, 4, RED);
+    const isOnline = srv.status === 'ONLINE';
+    R.fillCircle(772, 20, 8, isOnline ? GREEN : RED);
+    R.fillCircle(772, 20, 3, WHITE);
+    R.drawTextRight(772, 34, '3/3', BLACK, null, 1);
+    R.drawText(24, 28, 'SRV', BLACK, null, 5);
+    R.drawText(24, 60, srv.label.toUpperCase() + ' · MONITOR', BLUE, null, 1.5);
+    R.drawBadge(662, 46, srv.status, WHITE, isOnline ? GREEN : RED);
+    // 6卡片
+    const padding = 24, gap = 12;
+    const cardW = (792 - padding * 2 - gap) / 2;
+    const cardH = 92;
+    const startY = 110;
+    const metrics = [
+        { l: 'CPU',    v: srv.cpu + '%',          r: srv.cpu / 100,       c: BLUE,   i: '⬡' },
+        { l: 'MEM',    v: srv.mem + '%',          r: srv.mem / 100,       c: GREEN,  i: '◆' },
+        { l: 'DISK',   v: srv.disk + '%',         r: srv.disk / 100,      c: YELLOW, i: '◇' },
+        { l: 'NET UP', v: srv.netUp + ' MB/s',   r: Math.min(1, srv.netUp / 10),  c: RED,    i: '▲' },
+        { l: 'NET DL', v: srv.netDown + ' MB/s', r: Math.min(1, srv.netDown / 20), c: BLUE, i: '▼' },
+        { l: 'UPTIME', v: srv.uptime,            r: 0,                   c: GREEN,  i: '◷' },
+    ];
+    metrics.forEach(function(m, i) {
+        const col = i % 2, row = Math.floor(i / 2);
+        const x = padding + col * (cardW + gap);
+        const y = startY + row * (cardH + gap);
+        R.drawRoundRect(x, y, cardW, cardH, 6, WHITE, m.c);
+        R.fillRect(x, y, cardW, 22, m.c);
+        R.drawText(x + 10, y + 4, m.l + '  ' + m.i, WHITE, null, 1.3);
+        R.drawText(x + 10, y + 28, m.v, BLACK, null, 3);
+        if (m.r > 0) {
+            const barX = x + 10, barY = y + 64, barW = cardW - 20;
+            R.fillRoundRect(barX, barY, barW, 10, 3, BLACK);
+            const fillW = Math.max(8, Math.floor((barW - 2) * m.r));
+            const barColor = m.r > 0.85 ? RED : (m.r > 0.7 ? YELLOW : m.c);
+            R.fillRoundRect(barX + 1, barY + 1, fillW, 8, 2, barColor);
+        } else {
+            R.drawText(x + 10, y + 64, 'Since boot', BLUE, null, 1);
+        }
+    });
+    R.drawText(24, 498, formatTimestamp(), BLACK, null, 1);
+    R.drawTextRight(768, 498, srv.label, RED, null, 1);
+}
+
+// ===== 服务器监控状态显示 =====
 function setSrvStatus(text, isError) {
     var el = document.getElementById('srv-status-text');
     if (!el) return;
     el.textContent = text;
     el.style.color = isError ? '#D32F2F' : '#4CAF50';
-}
-
-async function cloudSrvQuery() {
-    try {
-        setSrvStatus('正在查询...');
-        var r = await cloudCall('srvQuery', 'GET');
-        setSrvStatus('CPU ' + r.cpu + '% / MEM ' + r.mem + '%' + (r.error ? ' (错误: ' + r.error + ')' : ''));
-        srvPreviewRender();
-    } catch (err) {
-        setSrvStatus('查询失败: ' + err.message, true);
-    }
 }

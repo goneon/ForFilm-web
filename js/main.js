@@ -26,6 +26,8 @@ function initStyleSwitcher() {
 }
 
 // 页面导航功能
+let infoPageInitialized = false;
+
 function initNavigation() {
     const navItems = document.querySelectorAll('.nav-item');
     const pages = document.querySelectorAll('.page');
@@ -45,6 +47,16 @@ function initNavigation() {
             // 更新页面显示
             pages.forEach(page => page.classList.remove('active'));
             document.getElementById(pageId).classList.add('active');
+
+            // 切换到信息墙时触发预览渲染
+            if (pageId === 'info-page' && !infoPageInitialized) {
+                infoPageInitialized = true;
+                if (typeof mcPreviewRender === 'function') {
+                    mcPreviewRender();
+                    aiPreviewRender();
+                    srvPreviewRender();
+                }
+            }
         });
     });
 
