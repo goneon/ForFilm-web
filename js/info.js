@@ -1,20 +1,21 @@
 // ForFilm 信息墙 (Pro 固件专用 - 设备直连)
-// 通过 BLE 0x3E-0x4C 控制设备信息墙, 设备直接请求 MC/AI/SRV API
+// 通过 BLE 0x3E-0x54 控制设备信息墙, 设备直接请求 MC/AI API
 // 含 E-paper 预览 Canvas 渲染 + 背景图支持
 
 // ===== 设备端信息墙状态 =====
 let deviceInfoEnable = 0;
+let deviceInfoMcEnable = 0;
+let deviceInfoAiEnable = 0;
 let deviceInfoMcHost = '';
 let deviceInfoMcPort = 25565;
 let deviceInfoMcUrl = '';
 let deviceInfoAiUrl = '';
 let deviceInfoAiToken = '';
-let deviceInfoSrvUrl = '';
 let deviceInfoRefreshMin = 0;
 let deviceInfoPage = 0;
 
 // ===== 背景图管理 =====
-const bgImages = { mc: null, ai: null, srv: null };
+const bgImages = { mc: null, ai: null };
 const bgCache = {};
 
 // ===== E-paper 调色板 (6色, 匹配固件) =====
@@ -57,7 +58,6 @@ function handleBgUpload(page, input) {
         document.getElementById(page + '-bg-clear').style.display = 'inline-flex';
         if (page === 'mc') mcPreviewRender();
         else if (page === 'ai') aiPreviewRender();
-        else if (page === 'srv') srvPreviewRender();
     };
     reader.readAsDataURL(file);
 }
@@ -69,7 +69,6 @@ function clearBgImage(page) {
     document.getElementById(page + '-bg-clear').style.display = 'none';
     if (page === 'mc') mcPreviewRender();
     else if (page === 'ai') aiPreviewRender();
-    else if (page === 'srv') srvPreviewRender();
 }
 
 async function getProcessedBg(page) {
@@ -980,12 +979,13 @@ function loadDeviceInfoConfig() {
     if (!device) return;
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET, null))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET, null)))
+        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET, null)))
-        .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET, null)))
         .then(() => queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET, null)))
         .catch(err => console.warn('read info config from device failed', err));
 }
@@ -995,6 +995,22 @@ function toggleInfoSwitch() {
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE, v))
         .then(() => { deviceInfoEnable = v; setInfoStatus(v ? '已开启' : '已关闭'); })
         .catch(err => setInfoStatus('失败: ' + err.message, true));
+}
+
+// MC 独立开关 (0x51)
+function toggleMcEnable() {
+    const v = document.getElementById('info-mc-enable-switch').checked ? 1 : 0;
+    queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE, v))
+        .then(() => { deviceInfoMcEnable = v; setMcStatus(v ? 'MC 检测已开启' : 'MC 检测已关闭'); })
+        .catch(err => setMcStatus('失败: ' + err.message, true));
+}
+
+// AI 独立开关 (0x53)
+function toggleAiEnable() {
+    const v = document.getElementById('info-ai-enable-switch').checked ? 1 : 0;
+    queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE, v))
+        .then(() => { deviceInfoAiEnable = v; setAiStatus(v ? 'AI 检测已开启' : 'AI 检测已关闭'); })
+        .catch(err => setAiStatus('失败: ' + err.message, true));
 }
 
 // 下发 MC 服务器 host:port 到设备 (SLP 直连)
@@ -1055,17 +1071,6 @@ function applyInfoAiToken() {
         .catch(err => setAiStatus('失败: ' + err.message, true));
 }
 
-// 下发服务器监控 API URL 到设备
-function applyInfoSrvUrl() {
-    const url = document.getElementById('info-srv-url-input').value.trim();
-    if (!url) { setSrvStatus('URL 为空', true); return; }
-    if (url.length > 192) { setSrvStatus('URL 过长 (>192)', true); return; }
-    const pkt = buildStringPacket(BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL, url, 192);
-    queueBleCmd(() => sendBlePacket(pkt))
-        .then(() => { deviceInfoSrvUrl = url; setSrvStatus('SRV URL 已下发 (' + url.length + ' 字符)'); })
-        .catch(err => setSrvStatus('失败: ' + err.message, true));
-}
-
 function onInfoRefresh() {
     queueBleCmd(() => sendBleCmd(BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH, null))
         .then(() => setInfoStatus('已触发刷新, 设备将直接请求 API'))
@@ -1114,6 +1119,14 @@ function handleInfoWallResponse(cmdType, data) {
         deviceInfoEnable = data[3];
         const sw = document.getElementById('info-enable-switch');
         if (sw) sw.checked = !!deviceInfoEnable;
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE_GET && data.length >= 4) {
+        deviceInfoMcEnable = data[3];
+        const sw = document.getElementById('info-mc-enable-switch');
+        if (sw) sw.checked = !!deviceInfoMcEnable;
+    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE_GET && data.length >= 4) {
+        deviceInfoAiEnable = data[3];
+        const sw = document.getElementById('info-ai-enable-switch');
+        if (sw) sw.checked = !!deviceInfoAiEnable;
     } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET && data.length > 3) {
         deviceInfoMcHost = bytesToAsciiString(data, 3, data[2]);
         const inp = document.getElementById('info-mc-host-input');
@@ -1138,11 +1151,6 @@ function handleInfoWallResponse(cmdType, data) {
         const inp = document.getElementById('info-ai-token-input');
         if (inp) inp.value = deviceInfoAiToken;
         setAiStatus('已读取设备 AI Token (' + deviceInfoAiToken.length + ' 字符)');
-    } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET && data.length > 3) {
-        deviceInfoSrvUrl = bytesToAsciiString(data, 3, data[2]);
-        const inp = document.getElementById('info-srv-url-input');
-        if (inp) inp.value = deviceInfoSrvUrl;
-        setSrvStatus('已读取设备 SRV URL (' + deviceInfoSrvUrl.length + ' 字符)');
     } else if (cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET && data.length >= 5) {
         deviceInfoRefreshMin = (data[3] << 8) | data[4];
         const mcSlider = document.getElementById('mc-refresh-min');
@@ -1169,16 +1177,13 @@ function setInfoSectionVisible(visible) {
 
 // ===== 初始化 =====
 function initInfoPage() {
-    mcPreviewRender(); aiPreviewRender(); srvPreviewRender();
+    mcPreviewRender(); aiPreviewRender();
 
     const mcHostEl = document.getElementById('info-mc-host-input');
     if (mcHostEl) mcHostEl.addEventListener('input', mcPreviewRender);
 
     const aiLabelEl = document.getElementById('cloud-ai-label');
     if (aiLabelEl) aiLabelEl.addEventListener('input', aiPreviewRender);
-
-    const srvLabelEl = document.getElementById('cloud-srv-label');
-    if (srvLabelEl) srvLabelEl.addEventListener('input', srvPreviewRender);
 
     const previewStyleEl = document.getElementById('mc-preview-style');
     if (previewStyleEl) previewStyleEl.addEventListener('change', function () {
@@ -1187,9 +1192,6 @@ function initInfoPage() {
 
     const aiStyleEl = document.getElementById('ai-preview-style');
     if (aiStyleEl) aiStyleEl.addEventListener('change', aiPreviewRender);
-
-    const srvStyleEl = document.getElementById('srv-preview-style');
-    if (srvStyleEl) srvStyleEl.addEventListener('change', srvPreviewRender);
 
     const showPlayersEl = document.getElementById('mc-show-players');
     if (showPlayersEl) showPlayersEl.addEventListener('change', mcPreviewRender);
@@ -1216,154 +1218,6 @@ function switchInfoTab(tabId) {
     if (panel) panel.classList.add('active');
     if (tabId === 'mc-tab') mcPreviewRender();
     else if (tabId === 'ai-tab') aiPreviewRender();
-    else if (tabId === 'srv-tab') srvPreviewRender();
-}
-
-// ===== 服务器监控 mock 数据 =====
-function getSrvMockData() {
-    return {
-        label: 'My Server',
-        status: 'ONLINE',
-        cpu: 42,
-        mem: 68,
-        disk: 55,
-        netUp: 1.2,
-        netDown: 8.5,
-        uptime: '14d 6h',
-        cpuCores: 4,
-        memTotal: 16
-    };
-}
-
-function getSrvShowCores() {
-    const el = document.getElementById('srv-show-cores');
-    return el ? el.checked : true;
-}
-
-// ===== 服务器监控渲染 =====
-async function srvPreviewRender() {
-    if (!EpdRenderer.init('srv-preview-canvas')) return;
-    const srv = getSrvMockData();
-    const R = EpdRenderer;
-
-    // 绘制背景图（如果有）
-    const bgCanvas = await getProcessedBg('srv');
-    if (bgCanvas) {
-        R.ctx.drawImage(bgCanvas, 0, 0);
-        R.ctx.globalAlpha = 0.45;
-        R.ctx.fillStyle = PALETTE[0x01];
-        R.ctx.fillRect(0, 0, 792, 528);
-        R.ctx.globalAlpha = 1.0;
-    } else {
-        R.clear(0x01);
-    }
-
-    srvPreviewModern(R, srv);
-}
-
-// ===== 服务器监控 - 优雅仪表盘 =====
-function srvPreviewElegant(R, srv) {
-    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
-
-    R.clear(WHITE);
-
-    // -- 边饰：红色顶底（服务器监控专属配色） --
-    R.fillRect(0, 0, 792, 4, RED);
-    R.fillRect(0, 520, 792, 8, RED);
-
-    // -- 标题胶囊（蓝色） --
-    R.fillRoundRect(20, 18, 460, 42, 8, BLUE);
-    R.drawText(36, 28, 'SRV  ◆  ' + srv.label.toUpperCase(), WHITE, null, 3);
-
-    // -- 状态徽章 --
-    R.fillRoundRect(620, 20, 100, 30, 6, GREEN);
-    R.fillCircle(636, 35, 3, WHITE);
-    R.drawTextCenter(676, 28, srv.status, WHITE, null, 2);
-
-    // -- 页码 --
-    R.drawTextRight(776, 58, '3 / 3', BLACK, null, 2);
-
-    // -- 6 个指标卡（2列×3行） --
-    const cards = [
-        { label: 'CPU',    value: srv.cpu + '%',           ratio: srv.cpu / 100,       color: BLUE,   x: 30,  y: 90 },
-        { label: 'MEM',    value: srv.mem + '%',           ratio: srv.mem / 100,       color: GREEN,  x: 410, y: 90 },
-        { label: 'DISK',   value: srv.disk + '%',          ratio: srv.disk / 100,      color: YELLOW, x: 30,  y: 235 },
-        { label: 'NET UP', value: srv.netUp + ' MB/s',     ratio: Math.min(1, srv.netUp / 10),  color: RED,    x: 410, y: 235 },
-        { label: 'NET DL', value: srv.netDown + ' MB/s',   ratio: Math.min(1, srv.netDown / 20), color: BLUE,   x: 30,  y: 380 },
-        { label: 'UPTIME', value: srv.uptime,              ratio: 0,                   color: GREEN,  x: 410, y: 380 }
-    ];
-
-    cards.forEach(function(c) {
-        const cw = 352, ch = 120;
-        // 卡片外框
-        R.fillRoundRect(c.x, c.y, cw, 30, 5, c.color);
-        R.drawText(c.x + 12, c.y + 8, c.label, WHITE, null, 2);
-        // 值
-        R.drawText(c.x + 12, c.y + 42, c.value, BLACK, null, 4);
-        // 进度条（除 UPTIME 外）
-        if (c.ratio > 0) {
-            const barX = c.x + 12, barY = c.y + 92, barW = cw - 24;
-            R.fillRoundRect(barX, barY, barW, 12, 3, BLACK);
-            const fillW = Math.max(12, Math.floor(barW * c.ratio));
-            // 颜色根据值变化
-            var barColor = c.color;
-            if (c.ratio > 0.85) barColor = RED;
-            else if (c.ratio > 0.7) barColor = YELLOW;
-            R.fillRoundRect(barX, barY, fillW, 12, 3, barColor);
-        }
-    });
-
-    // 品牌
-    R.fillRect(720, 488, 60, 22, RED);
-    R.drawText(730, 494, 'Pro', WHITE, null, 2);
-}
-
-// ===== 服务器监控 - 经典黑白 =====
-function srvPreviewClassic(R, srv) {
-    R.clear(0x01);
-    R.fillRect(0, 0, 792, 60, 0x00);
-    R.drawText(20, 18, 'SRV - ' + srv.label, 0x01, null, 3);
-    R.drawText(740, 22, '3/3', 0x01, null, 2);
-    R.drawBadge(20, 75, srv.status, 0x01, 0x06);
-
-    var rows = [
-        { l: 'CPU',       v: srv.cpu + '%' },
-        { l: 'MEMORY',    v: srv.mem + '%' },
-        { l: 'DISK',      v: srv.disk + '%' },
-        { l: 'NET UP',    v: srv.netUp + ' MB/s' },
-        { l: 'NET DOWN',  v: srv.netDown + ' MB/s' },
-        { l: 'UPTIME',    v: srv.uptime }
-    ];
-    rows.forEach(function(r, i) {
-        var y = 110 + i * 60;
-        R.drawText(30, y, r.l, 0x00, null, 2);
-        R.drawTextRight(762, y, r.v, 0x05, null, 2);
-        R.drawHline(30, y + 28, 732, 0x00);
-    });
-}
-
-// ===== 服务器监控 - 深色主题 =====
-function srvPreviewDark(R, srv) {
-    R.clear(0x00);
-    R.fillRect(0, 0, 792, 60, 0x01);
-    R.drawText(20, 18, 'SRV - ' + srv.label, 0x00, null, 3);
-    R.drawText(740, 22, '3/3', 0x00, null, 2);
-    R.drawBadge(20, 75, srv.status, 0x01, 0x06);
-
-    var rows = [
-        { l: 'CPU',       v: srv.cpu + '%',        c: 0x05 },
-        { l: 'MEMORY',    v: srv.mem + '%',        c: 0x06 },
-        { l: 'DISK',      v: srv.disk + '%',       c: 0x02 },
-        { l: 'NET UP',    v: srv.netUp + ' MB/s',  c: 0x03 },
-        { l: 'NET DOWN',  v: srv.netDown + ' MB/s', c: 0x05 },
-        { l: 'UPTIME',    v: srv.uptime,           c: 0x06 }
-    ];
-    rows.forEach(function(r, i) {
-        var y = 110 + i * 60;
-        R.drawText(30, y, r.l, 0x01, null, 2);
-        R.drawTextRight(762, y, r.v, r.c, null, 2);
-        R.drawHline(30, y + 28, 732, 0x05);
-    });
 }
 
 // ===== 现代化风格（背景图 + 极简设计） =====
@@ -1559,59 +1413,4 @@ function aiPreviewModern(R, ai) {
     R.drawTextCenter(396, 440, tip, tipColor, null, 1.5);
     R.drawText(24, 498, formatTimestamp(), BLACK, null, 1);
     R.drawTextRight(768, 498, ai.label, BLUE, null, 1);
-}
-
-function srvPreviewModern(R, srv) {
-    const BLACK = 0x00, WHITE = 0x01, YELLOW = 0x02, RED = 0x03, BLUE = 0x05, GREEN = 0x06;
-    R.clear(WHITE);
-    R.fillRect(0, 0, 6, 528, RED);
-    R.fillRect(0, 524, 792, 4, RED);
-    const isOnline = srv.status === 'ONLINE';
-    R.fillCircle(772, 20, 8, isOnline ? GREEN : RED);
-    R.fillCircle(772, 20, 3, WHITE);
-    R.drawTextRight(772, 34, '3/3', BLACK, null, 1);
-    R.drawText(24, 28, 'SRV', BLACK, null, 5);
-    R.drawText(24, 60, srv.label.toUpperCase() + ' · MONITOR', BLUE, null, 1.5);
-    R.drawBadge(662, 46, srv.status, WHITE, isOnline ? GREEN : RED);
-    // 6卡片
-    const padding = 24, gap = 12;
-    const cardW = (792 - padding * 2 - gap) / 2;
-    const cardH = 92;
-    const startY = 110;
-    const metrics = [
-        { l: 'CPU',    v: srv.cpu + '%',          r: srv.cpu / 100,       c: BLUE,   i: '⬡' },
-        { l: 'MEM',    v: srv.mem + '%',          r: srv.mem / 100,       c: GREEN,  i: '◆' },
-        { l: 'DISK',   v: srv.disk + '%',         r: srv.disk / 100,      c: YELLOW, i: '◇' },
-        { l: 'NET UP', v: srv.netUp + ' MB/s',   r: Math.min(1, srv.netUp / 10),  c: RED,    i: '▲' },
-        { l: 'NET DL', v: srv.netDown + ' MB/s', r: Math.min(1, srv.netDown / 20), c: BLUE, i: '▼' },
-        { l: 'UPTIME', v: srv.uptime,            r: 0,                   c: GREEN,  i: '◷' },
-    ];
-    metrics.forEach(function(m, i) {
-        const col = i % 2, row = Math.floor(i / 2);
-        const x = padding + col * (cardW + gap);
-        const y = startY + row * (cardH + gap);
-        R.drawRoundRect(x, y, cardW, cardH, 6, WHITE, m.c);
-        R.fillRect(x, y, cardW, 22, m.c);
-        R.drawText(x + 10, y + 4, m.l + '  ' + m.i, WHITE, null, 1.3);
-        R.drawText(x + 10, y + 28, m.v, BLACK, null, 3);
-        if (m.r > 0) {
-            const barX = x + 10, barY = y + 64, barW = cardW - 20;
-            R.fillRoundRect(barX, barY, barW, 10, 3, BLACK);
-            const fillW = Math.max(8, Math.floor((barW - 2) * m.r));
-            const barColor = m.r > 0.85 ? RED : (m.r > 0.7 ? YELLOW : m.c);
-            R.fillRoundRect(barX + 1, barY + 1, fillW, 8, 2, barColor);
-        } else {
-            R.drawText(x + 10, y + 64, 'Since boot', BLUE, null, 1);
-        }
-    });
-    R.drawText(24, 498, formatTimestamp(), BLACK, null, 1);
-    R.drawTextRight(768, 498, srv.label, RED, null, 1);
-}
-
-// ===== 服务器监控状态显示 =====
-function setSrvStatus(text, isError) {
-    var el = document.getElementById('srv-status-text');
-    if (!el) return;
-    el.textContent = text;
-    el.style.color = isError ? '#D32F2F' : '#4CAF50';
 }

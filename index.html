@@ -523,9 +523,6 @@
                     <button class="info-sub-tab" data-info-tab="ai-tab" onclick="switchInfoTab('ai-tab')">
                         <i class="material-icons">smart_toy</i> AI Token
                     </button>
-                    <button class="info-sub-tab" data-info-tab="srv-tab" onclick="switchInfoTab('srv-tab')">
-                        <i class="material-icons">monitor_heart</i> 服务器监控
-                    </button>
                 </div>
 
                 <!-- MC 子页 -->
@@ -555,6 +552,16 @@
                                 <span>MC 服务器配置 (设备直连)</span>
                             </div>
                             <div class="section-content">
+                                <div class="setting-item switch-item">
+                                    <div class="setting-info">
+                                        <span class="setting-label">MC 检测开关</span>
+                                        <span class="setting-desc">独立控制 MC 子页是否启用</span>
+                                    </div>
+                                    <label class="switch">
+                                        <input type="checkbox" id="info-mc-enable-switch" onchange="toggleMcEnable()">
+                                        <span class="slider-toggle"></span>
+                                    </label>
+                                </div>
                                 <div class="network-input-group">
                                     <label class="network-label">服务器地址 (SLP 直连)</label>
                                     <div class="api-url-row">
@@ -613,6 +620,16 @@
                                 <span>AI Token 配置 (设备直连)</span>
                             </div>
                             <div class="section-content">
+                                <div class="setting-item switch-item">
+                                    <div class="setting-info">
+                                        <span class="setting-label">AI 检测开关</span>
+                                        <span class="setting-desc">独立控制 AI 子页是否启用</span>
+                                    </div>
+                                    <label class="switch">
+                                        <input type="checkbox" id="info-ai-enable-switch" onchange="toggleAiEnable()">
+                                        <span class="slider-toggle"></span>
+                                    </label>
+                                </div>
                                 <div class="network-input-group">
                                     <label class="network-label">显示名称 (仅预览用)</label>
                                     <input type="text" id="cloud-ai-label" oninput="aiPreviewRender()" placeholder="DeepSeek / 通义千问">
@@ -637,55 +654,6 @@
                                 </div>
                                 <div class="wifi-status-row">
                                     <span id="ai-status-text" style="font-size:12px;color:#999;">就绪</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                </div>
-
-                <!-- 服务器监控子页 -->
-                <div id="srv-tab" class="info-sub-content">
-                <div class="info-page-layout">
-                    <!-- 左侧：墨水屏预览 -->
-                    <div class="info-preview-panel">
-                        <div class="epd-frame">
-                            <canvas id="srv-preview-canvas" width="792" height="528"></canvas>
-                        </div>
-                        <div class="info-preview-controls">
-                            <label class="file-upload-btn">
-                                <input type="file" id="srv-bg-upload" accept="image/*" style="display:none" onchange="handleBgUpload('srv', this)">
-                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">image</i> 上传背景图
-                            </label>
-                            <button class="secondary-button" id="srv-bg-clear" style="display:none;width:auto;padding:6px 14px;font-size:13px;" onclick="clearBgImage('srv')">
-                                <i class="material-icons" style="font-size:16px;vertical-align:middle;">close</i> 清除背景
-                            </button>
-                        </div>
-                    </div>
-                    <!-- 右侧：配置面板 (设备直连) -->
-                    <div class="info-config-panel">
-                        <div class="settings-section">
-                            <div class="section-header">
-                                <i class="material-icons">monitor_heart</i>
-                                <span>服务器监控配置 (设备直连)</span>
-                            </div>
-                            <div class="section-content">
-                                <div class="network-input-group">
-                                    <label class="network-label">显示名称 (仅预览用)</label>
-                                    <input type="text" id="cloud-srv-label" oninput="srvPreviewRender()" placeholder="My Server">
-                                </div>
-                                <div class="network-input-group">
-                                    <label class="network-label">服务器监控 API URL</label>
-                                    <input type="text" id="info-srv-url-input" placeholder="https://server.example.com/api/stats">
-                                    <div class="setting-desc">设备直接 GET 该 URL, 解析 cpu/mem/disk/net_up/net_down/uptime 字段</div>
-                                </div>
-                                <div class="network-btn-row">
-                                    <button class="secondary-button" onclick="applyInfoSrvUrl()" style="width:100%;">
-                                        <i class="material-icons">check</i> 下发到设备
-                                    </button>
-                                </div>
-                                <div class="wifi-status-row">
-                                    <span id="srv-status-text" style="font-size:12px;color:#999;">就绪</span>
                                 </div>
                             </div>
                         </div>
