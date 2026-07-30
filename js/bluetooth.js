@@ -80,18 +80,21 @@ const BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET = 0x41;       // 查询 MC API URL
 const BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL = 0x42;           // 设置 AI API URL (string)
 const BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET = 0x43;       // 查询 AI API URL
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH = 0x44;          // 立即触发一次刷新 (无 data)
-const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE = 0x45;             // 切换显示页 (0=MC, 1=AI, 2=SRV)
+const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE = 0x45;             // 切换显示页 (0=MC, 1=AI)
 const BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET = 0x46;         // 查询当前页
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN = 0x47;      // 设置刷新间隔 (uint16, 分钟)
 const BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET = 0x48;  // 查询刷新间隔
 const BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN = 0x49;         // 设置 AI API Token (string)
 const BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET = 0x4A;     // 查询 AI API Token
-const BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL = 0x4B;          // 设置服务器监控 API URL (string)
-const BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET = 0x4C;      // 查询服务器监控 API URL
+// 0x4B-0x4C 保留 (原 SRV 命令已删除)
 const BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST = 0x4D;          // 设置 MC 服务器主机 (string, SLP 直连)
 const BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET = 0x4E;      // 查询 MC 服务器主机
 const BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT = 0x4F;          // 设置 MC 服务器端口 (uint16)
 const BLE_FILM_TRANS_CH_CTRL_INFO_MC_PORT_GET = 0x50;      // 查询 MC 服务器端口
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE = 0x51;        // MC 服务器检测开关 (0/1)
+const BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE_GET = 0x52;    // 查询 MC 开关
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE = 0x53;        // AI Token 检测开关 (0/1)
+const BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE_GET = 0x54;    // 查询 AI 开关
 
 const BLE_CMD_LEN_MIN = 4;
 
@@ -978,7 +981,7 @@ function setupBluetoothListener() {
             console.log(`下载状态: state=${state}, progress=${progress}%`);
             updateDownloadStatus(state, progress);
         }
-        // 信息墙 (0x3E-0x50) - 设备直连, 转给 info.js 处理
+        // 信息墙 (0x3E-0x54) - 设备直连, 转给 info.js 处理
         else if (data[0] === BLE_CMD_HEAD && (
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_ENABLE_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_HOST_GET ||
@@ -986,7 +989,8 @@ function setupBluetoothListener() {
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_URL_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_URL_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_TOKEN_GET ||
-            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_SRV_URL_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_MC_ENABLE_GET ||
+            cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_AI_ENABLE_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_REFRESH_MIN_GET ||
             cmdType === BLE_FILM_TRANS_CH_CTRL_INFO_PAGE_GET
         )) {
